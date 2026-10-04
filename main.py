@@ -33,7 +33,7 @@ def get_mobile_details(mobile_number: str) -> dict:
     return {"error": "No details found"}
 
 # Token added here securely
-TELEGRAM_BOT_TOKEN = "8496632773:AAHdTKxY_iNN3-sSsJmgzBw4zmOIZeB5mrY"
+TELEGRAM_BOT_TOKEN = "8431563306:AAG5enAxD7XJOjNApox082x03sMC74KHDKc"
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
