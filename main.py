@@ -32,8 +32,7 @@ def get_mobile_details(mobile_number: str) -> dict:
         pass
     return {"error": "No details found"}
 
-# Token added here securely
-TELEGRAM_BOT_TOKEN = "8431563306:AAG5enAxD7XJOjNApox082x03sMC74KHDKc"
+TELEGRAM_BOT_TOKEN = "8431563306:AAFAV_b_JF2zBj6VNyHXNjUWThyA48a8F-U"
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -59,16 +58,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text(f"❌ **No details found for number:** `{mobile}`", parse_mode="Markdown")
         return
 
-    data = raw_data.get("data", raw_data) if isinstance(raw_data, dict) else {}
-    if not isinstance(data, dict):
-        data = {}
+    # Proper deep parsing according to your JSON structure
+    try:
+        res_level1 = raw_data.get("result", {})
+        res_level2 = res_level1.get("result", {}) if isinstance(res_level1, dict) else {}
+        
+        main_records = res_level2.get("Main_Records", [])
+        alt_records = res_level2.get("Alt_Records", [])
+        
+        main_rec = main_records[0] if isinstance(main_records, list) and len(main_records) > 0 else {}
+        alt_rec = alt_records[0] if isinstance(alt_records, list) and len(alt_records) > 0 else {}
 
-    name = data.get("name") or data.get("full_name") or data.get("owner_name") or "NA"
-    fname = data.get("fname") or data.get("father_name") or data.get("fathers_name") or "NA"
-    address = data.get("address") or data.get("permanent_address") or data.get("full_address") or "NA"
-    alt_num = data.get("alt_num") or data.get("alternate_number") or data.get("alt_number") or "NA"
-    id_proof = data.get("id") or data.get("id_number") or data.get("aadhaar") or "NA"
-    gmail = data.get("gmail") or data.get("email") or "NA"
+        name = main_rec.get("name") or alt_rec.get("name") or "NA"
+        fname = main_rec.get("fname") or alt_rec.get("fname") or "NA"
+        address = main_rec.get("address") or alt_rec.get("address") or "NA"
+        alt_num = main_rec.get("alt") or alt_rec.get("alt") or "NA"
+        id_proof = alt_rec.get("id") or "NA"
+        gmail = alt_rec.get("email") or "NA"
+    except Exception:
+        name, fname, address, alt_num, id_proof, gmail = "NA", "NA", "NA", "NA", "NA", "NA"
+
+    if name == "NA" and address == "NA":
+        await wait_msg.edit_text(f"❌ **No details found for number:** `{mobile}`", parse_mode="Markdown")
+        return
 
     response_text = f"📱 ᴍᴏʙɪʟᴇ ɴᴜᴍʙᴇʀ ʟᴏᴏᴋᴜᴘ\n"
     response_text += f"↔️↔️↔️↔️↔️↔️↔️↔️\n\n"
@@ -80,7 +92,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response_text += f"• ᴀʟᴛ ɴᴜᴍʙᴇʀ: {alt_num}\n"
     response_text += f"• ɪᴅ: {id_proof}\n"
     response_text += f"• ɢᴍᴀɪʟ: {gmail}\n\n"
-    response_text += f"↔️↔️↔️↔️↔️↔️↔️↔️\n"
+    response_text += f"↔️↔️↔️↔️↔️↔️️↔️↔️\n"
     response_text += f"💻 @RD3B4T"
 
     await wait_msg.edit_text(response_text)
