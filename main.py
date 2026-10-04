@@ -1,122 +1,234 @@
-from flask import Flask, jsonify
+import time
+import telebot
 import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-import asyncio
-import threading
-import os
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-app = Flask(__name__)
+# === BOT CONFIGURATION ===
+BOT_TOKEN = "8431563306:AAHlF_s8Ryc-6fS_beekBC3WGaeiXc9rh5g"
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-@app.route("/", methods=["GET"])
-def health_check():
-    return jsonify({
-        "status": "running",
-        "service": "Mobile Info Telegram Bot API",
-        "developer": "@RD3B4T"
-    }), 200
+# === ADMIN & AUTHORIZED USERS ===
+ADMIN_IDS = {6081767690}  # 👈 Yahan apna Telegram User ID daalein
+AUTHORIZED_USERS = set(ADMIN_IDS)
 
-def get_mobile_details(mobile_number: str) -> dict:
-    clean_num = mobile_number.strip().replace("+91", "").replace(" ", "")
-    url = f"https://free.proapis.bond/num?number={clean_num}"
+# === RATE LIMIT CONFIG ===
+COOLDOWN_SECONDS = 30
+user_cooldowns = {}
+
+# === OPTIMIZED REQUESTS SESSION ===
+session = requests.Session()
+retries = Retry(
+    total=2,
+    backoff_factor=0.3,
+    status_forcelist=[500, 502, 503, 504]
+)
+adapter = HTTPAdapter(max_retries=retries, pool_connections=10, pool_maxsize=10)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
+# === NORMALIZE NUMBER ===
+def clean_number(num):
+    num = str(num)
+    if num.startswith("91") and len(num) > 10:
+        num = num[-10:]
+    return num.strip()
+
+# === VALIDATE NUMBER ===
+def validate_mobile(mobile):
+    return mobile.isdigit() and len(mobile) == 10
+
+# === FORMAT RESULT ===
+def format_result(data, index):
+    if not isinstance(data, dict):
+        return ""
+
+    return f"""🔍 <b>RESULT #{index}</b>
+
+👤 Name: {data.get('name') or 'N/A'}
+👨 Father: {data.get('fname') or data.get('father_name') or 'N/A'}
+📱 Mobile: {data.get('mobile') or 'N/A'}
+📞 Alt: {data.get('alt') or data.get('alternate') or 'N/A'}
+📧 Email: {data.get('email') or 'N/A'}
+📍 Address: {data.get('address') or 'N/A'}
+📡 Circle: {data.get('circle') or 'N/A'}
+🪪 ID: {data.get('id') or 'N/A'}
+
+━━━━━━━━━━━━━━━━━━━━━━"""
+
+# === FETCH DATA WITH NESTED JSON PARSING ===
+def fetch_data(mobile):
+    url = f"https://free.proapis.bond/num?number={mobile}"
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json"
     }
+
     try:
-        response = requests.get(url, headers=headers, timeout=8)
-        if response.status_code == 200:
-            data = response.json()
-            if data:
-                return data
+        response = session.get(url, headers=headers, timeout=8)
+
+        if response.status_code != 200:
+            return "⚠️ API Server busy or maintenance mode. Try later."
+
+        try:
+            json_data = response.json()
+        except Exception:
+            return "⚠️️ Invalid API response (not JSON)."
+
+        if not isinstance(json_data, dict):
+            return "⚠️️ Server returned unexpected data format."
+
+        # 🔄 SAFE EXTRACTION (Handles nested 'result' -> 'result' -> 'Main_Records')
+        results = []
+        res_level1 = json_data.get("result")
+
+        if isinstance(res_level1, dict):
+            res_level2 = res_level1.get("result")
+            if isinstance(res_level2, dict):
+                results = res_level2.get("Main_Records", [])
+            elif isinstance(res_level2, list):
+                results = res_level2
+            else:
+                results = res_level1.get("Main_Records", [])
+        elif isinstance(res_level1, list):
+            results = res_level1
+
+        if not results or not isinstance(results, list):
+            return "⚠️ No data found for this number."
+
+        # Smart Matching
+        matched = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            mob1 = clean_number(r.get("mobile", ""))
+            mob2 = clean_number(r.get("alt", r.get("alternate", "")))
+
+            if mobile == mob1 or mobile == mob2:
+                matched.append(r)
+
+        target_list = matched if matched else [r for r in results if isinstance(r, dict)]
+
+        # Deduplication
+        seen = set()
+        unique = []
+
+        for r in target_list:
+            key = (r.get("name"), r.get("address"))
+            if key not in seen:
+                seen.add(key)
+                unique.append(r)
+
+            if len(unique) == 5:
+                break
+
+        if not unique:
+            return "⚠️ No match found."
+
+        final_results = [
+            formatted for i, data in enumerate(unique)
+            if (formatted := format_result(data, i + 1))
+        ]
+
+        if not final_results:
+            return "⚠️ Invalid data format received."
+
+        final = "\n".join(final_results)
+        signature = "\n\n━━━━━━━━━━━━━━━━━━━━━━\n<b>🔴 RDX_RUPESH</b>\n👑 Owner: <a href='https://t.me/RDXB0T'>@RDXB0T</a>"
+
+        return f"📊 Total Results: {len(unique)}\n\n{final}{signature}"
+
+    except requests.exceptions.Timeout:
+        return "⚠️ API Server timed out. Try again."
+    except requests.exceptions.ConnectionError:
+        return "⚠️ Connection error to API."
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
+
+# === ADMIN COMMANDS ===
+@bot.message_handler(commands=['auth'])
+def authorize_user(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "🚫 Only Admins can use this command!")
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ Usage: `/auth <USER_ID>`", parse_mode="Markdown")
+            return
+
+        target_id = int(args[1])
+        AUTHORIZED_USERS.add(target_id)
+        bot.reply_to(message, f"✅ User <code>{target_id}</code> is now authorized!")
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid User ID format.")
+
+@bot.message_handler(commands=['unauth'])
+def unauthorize_user(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "🚫 Only Admins can use this command!")
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "⚠️ Usage: `/unauth <USER_ID>`", parse_mode="Markdown")
+            return
+
+        target_id = int(args[1])
+        if target_id in AUTHORIZED_USERS and target_id not in ADMIN_IDS:
+            AUTHORIZED_USERS.remove(target_id)
+            bot.reply_to(message, f"🚫 Access revoked for <code>{target_id}</code>.")
+        else:
+            bot.reply_to(message, "⚠️ User not found or is an Admin.")
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid User ID format.")
+
+# === START COMMAND ===
+@bot.message_handler(commands=['start'])
+def start(message):
+    if message.from_user.id not in AUTHORIZED_USERS:
+        bot.reply_to(message, "🔒 Access Denied! Contact Admin for access.")
+        return
+    bot.reply_to(message, "👋 Welcome! Send a 10-digit mobile number to search 🔍")
+
+# === HANDLE MESSAGES ===
+@bot.message_handler(func=lambda message: True)
+def handle(message):
+    user_id = message.from_user.id
+
+    if user_id not in AUTHORIZED_USERS:
+        bot.reply_to(message, "🔒 Access Denied! Ask Admin to authorize your Telegram User ID.")
+        return
+
+    current_time = time.time()
+
+    if user_id not in ADMIN_IDS and user_id in user_cooldowns:
+        elapsed = current_time - user_cooldowns[user_id]
+        if elapsed < COOLDOWN_SECONDS:
+            remaining = int(COOLDOWN_SECONDS - elapsed)
+            bot.reply_to(message, f"⏳ Please wait <b>{remaining} seconds</b> before searching again!")
+            return
+
+    mobile = message.text.strip()
+
+    if not validate_mobile(mobile):
+        bot.reply_to(message, "❌ Enter valid 10-digit number.")
+        return
+
+    user_cooldowns[user_id] = current_time
+
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
     except Exception:
         pass
-    return {"error": "No details found"}
 
-TELEGRAM_BOT_TOKEN = "8431563306:AAFAV_b_JF2zBj6VNyHXNjUWThyA48a8F-U"
+    result = fetch_data(mobile)
+    bot.reply_to(message, result)
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "✨ **Welcome to Mobile Number Info Bot** ✨\n\n"
-        "🚀 Send me any 10-digit Mobile Number (e.g., `9876543210`) to get complete details.\n\n"
-        "⚡ **DEVELOPER**: @RD3B4T",
-        parse_mode="Markdown"
-    )
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    mobile = text.replace("+91", "").strip()
-    
-    if not mobile.isdigit() or len(mobile) < 10:
-        await update.message.reply_text("⚠️ **Invalid Format!** Please send a valid 10-digit mobile number.", parse_mode="Markdown")
-        return
-
-    wait_msg = await update.message.reply_text("🔍 **Searching database for details, please hold on...**", parse_mode="Markdown")
-
-    raw_data = await asyncio.to_thread(get_mobile_details, mobile)
-
-    if not raw_data or (isinstance(raw_data, dict) and "error" in raw_data):
-        await wait_msg.edit_text(f"❌ **No details found for number:** `{mobile}`", parse_mode="Markdown")
-        return
-
-    # Proper deep parsing according to your JSON structure
-    try:
-        res_level1 = raw_data.get("result", {})
-        res_level2 = res_level1.get("result", {}) if isinstance(res_level1, dict) else {}
-        
-        main_records = res_level2.get("Main_Records", [])
-        alt_records = res_level2.get("Alt_Records", [])
-        
-        main_rec = main_records[0] if isinstance(main_records, list) and len(main_records) > 0 else {}
-        alt_rec = alt_records[0] if isinstance(alt_records, list) and len(alt_records) > 0 else {}
-
-        name = main_rec.get("name") or alt_rec.get("name") or "NA"
-        fname = main_rec.get("fname") or alt_rec.get("fname") or "NA"
-        address = main_rec.get("address") or alt_rec.get("address") or "NA"
-        alt_num = main_rec.get("alt") or alt_rec.get("alt") or "NA"
-        id_proof = alt_rec.get("id") or "NA"
-        gmail = alt_rec.get("email") or "NA"
-    except Exception:
-        name, fname, address, alt_num, id_proof, gmail = "NA", "NA", "NA", "NA", "NA", "NA"
-
-    if name == "NA" and address == "NA":
-        await wait_msg.edit_text(f"❌ **No details found for number:** `{mobile}`", parse_mode="Markdown")
-        return
-
-    response_text = f"📱 ᴍᴏʙɪʟᴇ ɴᴜᴍʙᴇʀ ʟᴏᴏᴋᴜᴘ\n"
-    response_text += f"↔️↔️↔️↔️↔️↔️↔️↔️\n\n"
-    response_text += f"🔍 Qᴜᴇʀʏ: {mobile}\n\n"
-    response_text += f"✨ ᴅᴇᴛᴀɪʟꜱ:\n"
-    response_text += f"• ɴᴀᴍᴇ: {name}\n"
-    response_text += f"• ꜰᴀᴛʜᴇʀ'ꜱ ɴᴀᴍᴇ: {fname}\n"
-    response_text += f"• ᴀᴅᴅʀᴇꜱꜱ: {address}\n"
-    response_text += f"• ᴀʟᴛ ɴᴜᴍʙᴇʀ: {alt_num}\n"
-    response_text += f"• ɪᴅ: {id_proof}\n"
-    response_text += f"• ɢᴍᴀɪʟ: {gmail}\n\n"
-    response_text += f"↔️↔️↔️↔️↔️↔️️↔️↔️\n"
-    response_text += f"💻 @RD3B4T"
-
-    await wait_msg.edit_text(response_text)
-
-def run_telegram_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    async def main_bot():
-        application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-        
-        await application.initialize()
-        await application.start()
-        print("🤖 Telegram Bot is running smoothly using manual polling...")
-        await application.updater.start_polling()
-        
-        while True:
-            await asyncio.sleep(3600)
-
-    loop.run_until_complete(main_bot())
-
+# === RUN BOT ===
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    threading.Thread(target=run_telegram_bot, daemon=True).start()
-    app.run(host="0.0.0.0", port=port, debug=False)
+    print("🤖 Bot running with Nested JSON Parsing Fix...")
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
