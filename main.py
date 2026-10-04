@@ -32,7 +32,8 @@ def get_mobile_details(mobile_number: str) -> dict:
         pass
     return {"error": "No details found"}
 
-TELEGRAM_BOT_TOKEN = "8431563306:AAE2VbnnEnGSAQV3UaGqnME4ed6HmQzKrj4"
+# Token added here securely
+TELEGRAM_BOT_TOKEN = "8496632773:AAHdTKxY_iNN3-sSsJmgzBw4zmOIZeB5mrY"
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -79,7 +80,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response_text += f"• ᴀʟᴛ ɴᴜᴍʙᴇʀ: {alt_num}\n"
     response_text += f"• ɪᴅ: {id_proof}\n"
     response_text += f"• ɢᴍᴀɪʟ: {gmail}\n\n"
-    response_text += f"↔️↔️↔️↔️↔️↔️️↔️↔️\n"
+    response_text += f"↔️↔️↔️↔️↔️↔️↔️↔️\n"
     response_text += f"💻 @RD3B4T"
 
     await wait_msg.edit_text(response_text)
@@ -87,10 +88,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_telegram_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    application.run_polling()
+    
+    async def main_bot():
+        application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+        
+        await application.initialize()
+        await application.start()
+        print("🤖 Telegram Bot is running smoothly using manual polling...")
+        await application.updater.start_polling()
+        
+        while True:
+            await asyncio.sleep(3600)
+
+    loop.run_until_complete(main_bot())
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
